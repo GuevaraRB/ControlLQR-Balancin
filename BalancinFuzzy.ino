@@ -7,25 +7,21 @@ MPU6050 mpu(Wire);
 Servo escDer;
 Servo escIzq;
 
-// --- 1. INSTANCIA DEL CEREBRO DIFUSO ---
 Fuzzy *difuso = new Fuzzy();
 
-// --- 2. VARIABLES GLOBALES Y GANANCIAS ---
 float setpoint = -10.0;      
 unsigned long T_anterior = 0;
 
 int pwm_min = 1000;
 int pwm_max = 2000;
-int pwm_base_der = 1080; // Ajusta según la asimetría de tus motores
+int pwm_base_der = 1080;
 int pwm_base_izq = 1080;
 float vel_filtrada = 0.0; 
 
 // GANANCIAS VALIDADAS EN SIMULINK
-float Ke = 0.2;  // Atenuador del error para evitar sobrepico
-float Ki = 0.1;  // Ganancia del integrador (Memoria)
+float Ke = 0.2; 
+float Ki = 0.1;  
 float error_integral = 0.0;
-
-// Declaramos la función que arma el cerebro
 void setupFuzzy();
 
 void setup() {
@@ -34,8 +30,7 @@ void setup() {
   
   escDer.attach(18, pwm_min, pwm_max); 
   escIzq.attach(19, pwm_min, pwm_max);
-  
-  // Armado de los ESCs
+
   escDer.writeMicroseconds(1000);
   escIzq.writeMicroseconds(1000);
 
@@ -43,12 +38,9 @@ void setup() {
     Serial.println(F("Error MPU6050"));
     while(1){} 
   }
-  
-  // TUS OFFSETS CALIBRADOS
   mpu.setAccOffsets(-0.04, -0.02, 0.00);
   mpu.setGyroOffsets(-2.71, 0.38, -1.14);
 
-  // Cargamos la matemática difusa en la RAM del ESP32
   setupFuzzy();
 
   Serial.println(F("Iniciando ESC y Cargando Reglas Difusas..."));
@@ -64,31 +56,25 @@ void loop() {
     setpoint = dato.toFloat();
   }
   
-  // --- CONTROL DE TIEMPO (dt) ---
   mpu.update();
   unsigned long T_actual = micros();
   float dt = (T_actual - T_anterior) / 1000000.0;
   T_anterior = T_actual;
   
   if (dt <= 0.0 || dt > 0.1) return; 
-
-  // --- LECTURA DE SENSORES ---
+  
   float angulo_grados = -1.0 * mpu.getAngleX(); 
   float velocidad_grados_s = -1.0 * mpu.getGyroX();   
 
-  // --- CÁLCULO DE ERROR Y DERIVADA ---
   float error = setpoint - angulo_grados;
-  if (abs(error) < 1.0) error = 0; // Zona muerta de 1 grado
+  if (abs(error) < 1.0) error = 0; 
   
   float derivada_error = -velocidad_grados_s; 
 
-  // --- INTEGRADOR CLÁSICO (Acción I) ---
   error_integral += error * dt;
-  error_integral = constrain(error_integral, -20.0, 20.0); // Anti-windup
+  error_integral = constrain(error_integral, -20.0, 20.0);
   float accion_integral = -(error_integral * Ki);
 
-  // --- ENTRADAS AL CEREBRO DIFUSO (Acción PD) ---
-  // Saturamos a tus nuevos universos de discurso: [-15, 15] y [-80, 80]
   float entrada_1 = constrain(error * Ke, -15.0, 15.0);
   float entrada_2 = constrain(derivada_error, -80.0, 80.0);
 
@@ -97,20 +83,15 @@ void loop() {
   difuso->fuzzify();
   float u_fuzzy = difuso->defuzzify(1);
 
-  // --- FUSIÓN DE ESFUERZOS (Fuzzy + I) ---
-  // Sumamos las acciones y multiplicamos por -1 (como el bloque Gain de Simulink)
   float u_total = (u_fuzzy + accion_integral) * -1.0;
   u_total = constrain(u_total, -250.0, 250.0);
-
-  // --- ACTUADORES ---
   int pwm_der = pwm_base_der + u_total;
   int pwm_izq = pwm_base_izq - u_total;
 
-  int limite_inferior = 1100; // Idle-Up (Asegura que las hélices no se detengan)
+  int limite_inferior = 1100; 
   escDer.writeMicroseconds(constrain(pwm_der, limite_inferior, pwm_max));
   escIzq.writeMicroseconds(constrain(pwm_izq, limite_inferior, pwm_max));
   
-  // Imprimir para el Serial Plotter
   Serial.print(setpoint); Serial.print(",");
   Serial.print(angulo_grados); Serial.print(",");
   Serial.println(u_total);
@@ -118,60 +99,47 @@ void loop() {
   delay(4); 
 }
 
-// ====================================================================
-// FUNCIÓN DONDE ARMAMOS EL ARCHIVO .FIS DE MATLAB EN C++
-// ====================================================================
 void setupFuzzy() {
-  // ------------------------------------------------------------------
   // ENTRADA 1: ERROR Rango: [-15, 15]
-  // ------------------------------------------------------------------
   FuzzyInput *error = new FuzzyInput(1);
   
-  // eFLL usa FuzzySet(a, b, c, d). Si es triángulo, b y c son iguales.
-  FuzzySet *err_NG = new FuzzySet(-15, -15, -6, -2); // trapmf
-  FuzzySet *err_NP = new FuzzySet(-6, -2, -2, 0);    // trimf
-  FuzzySet *err_Z  = new FuzzySet(-2, 0, 0, 2);      // trimf (Muy estrecho, hiper-sensible)
-  FuzzySet *err_PP = new FuzzySet(0, 2, 2, 6);       // trimf
-  FuzzySet *err_PG = new FuzzySet(2, 6, 15, 15);     // trapmf
+  FuzzySet *err_NG = new FuzzySet(-15, -15, -6, -2); 
+  FuzzySet *err_NP = new FuzzySet(-6, -2, -2, 0);    
+  FuzzySet *err_Z  = new FuzzySet(-2, 0, 0, 2);      
+  FuzzySet *err_PP = new FuzzySet(0, 2, 2, 6);       
+  FuzzySet *err_PG = new FuzzySet(2, 6, 15, 15);     
   
   error->addFuzzySet(err_NG); error->addFuzzySet(err_NP); error->addFuzzySet(err_Z);
   error->addFuzzySet(err_PP); error->addFuzzySet(err_PG);
   difuso->addFuzzyInput(error);
-
-  // ------------------------------------------------------------------
+  
   // ENTRADA 2: VELOCIDAD ANGULAR Rango: [-80, 80]
-  // ------------------------------------------------------------------
   FuzzyInput *vel = new FuzzyInput(2);
   
-  FuzzySet *vel_NG = new FuzzySet(-80, -80, -40, -10); // trapmf
-  FuzzySet *vel_NP = new FuzzySet(-40, -10, -10, 0);   // trimf
-  FuzzySet *vel_Z  = new FuzzySet(-10, 0, 0, 10);      // trimf
-  FuzzySet *vel_PP = new FuzzySet(0, 10, 10, 40);      // trimf
-  FuzzySet *vel_PG = new FuzzySet(10, 40, 80, 80);     // trapmf
+  FuzzySet *vel_NG = new FuzzySet(-80, -80, -40, -10); 
+  FuzzySet *vel_NP = new FuzzySet(-40, -10, -10, 0);   
+  FuzzySet *vel_Z  = new FuzzySet(-10, 0, 0, 10);      
+  FuzzySet *vel_PP = new FuzzySet(0, 10, 10, 40);      
+  FuzzySet *vel_PG = new FuzzySet(10, 40, 80, 80);    
   
   vel->addFuzzySet(vel_NG); vel->addFuzzySet(vel_NP); vel->addFuzzySet(vel_Z);
   vel->addFuzzySet(vel_PP); vel->addFuzzySet(vel_PG);
   difuso->addFuzzyInput(vel);
 
-  // ------------------------------------------------------------------
   // SALIDA 1: ESFUERZO DE CONTROL Rango: [-250, 250]
-  // ------------------------------------------------------------------
   FuzzyOutput *esfuerzo = new FuzzyOutput(1);
   
-  FuzzySet *esf_NG = new FuzzySet(-250, -250, -100, -20); // trapmf
-  FuzzySet *esf_NP = new FuzzySet(-100, -20, -20, 0);     // trimf
-  FuzzySet *esf_Z  = new FuzzySet(-20, 0, 0, 20);         // trimf
-  FuzzySet *esf_PP = new FuzzySet(0, 20, 20, 100);        // trimf
-  FuzzySet *esf_PG = new FuzzySet(20, 100, 250, 250);     // trapmf
+  FuzzySet *esf_NG = new FuzzySet(-250, -250, -100, -20); 
+  FuzzySet *esf_NP = new FuzzySet(-100, -20, -20, 0);     
+  FuzzySet *esf_Z  = new FuzzySet(-20, 0, 0, 20);        
+  FuzzySet *esf_PP = new FuzzySet(0, 20, 20, 100);        
+  FuzzySet *esf_PG = new FuzzySet(20, 100, 250, 250);     
   
   esfuerzo->addFuzzySet(esf_NG); esfuerzo->addFuzzySet(esf_NP); esfuerzo->addFuzzySet(esf_Z);
   esfuerzo->addFuzzySet(esf_PP); esfuerzo->addFuzzySet(esf_PG);
   difuso->addFuzzyOutput(esfuerzo);
 
-  // ------------------------------------------------------------------
   // LAS 25 REGLAS (FAM MATRIX)
-  // ------------------------------------------------------------------
-  // Consecuentes globales para optimizar memoria
   FuzzyRuleConsequent *then_NG = new FuzzyRuleConsequent(); then_NG->addOutput(esf_NG);
   FuzzyRuleConsequent *then_NP = new FuzzyRuleConsequent(); then_NP->addOutput(esf_NP);
   FuzzyRuleConsequent *then_Z  = new FuzzyRuleConsequent(); then_Z->addOutput(esf_Z);
